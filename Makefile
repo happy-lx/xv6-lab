@@ -193,6 +193,11 @@ UPROGS=\
 	$U/_grind\
 	$U/_wc\
 	$U/_zombie\
+	$U/_sleep\
+	$U/_pingpong\
+	$U/_primes\
+	$U/_find\
+	$U/_xargs\
 
 
 
@@ -258,6 +263,8 @@ UEXTRA=
 ifeq ($(LAB),util)
 	UEXTRA += user/xargstest.sh
 endif
+
+UEXTRA += user/time.txt
 
 
 fs.img: mkfs/mkfs README $(UEXTRA) $(UPROGS)
