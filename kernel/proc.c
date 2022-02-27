@@ -97,6 +97,26 @@ allocpid() {
   return pid;
 }
 
+// get num of used process in system
+uint64
+usedproc(void)
+{
+  // get in-mem process number
+  uint64 used_proc_num = 0;
+  struct proc* p;
+  // what about the concurrent situation?
+  // an specific order to lock
+  for(p = proc; p < &proc[NPROC]; p++) {
+    acquire(&p->lock);
+    if(p -> state != UNUSED) {
+      used_proc_num++;
+    }
+    release(&p->lock);
+  }
+
+  return used_proc_num;
+}
+
 // Look in the process table for an UNUSED proc.
 // If found, initialize state required to run in the kernel,
 // and return with p->lock held.
@@ -313,6 +333,7 @@ fork(void)
 
   acquire(&np->lock);
   np->state = RUNNABLE;
+  np->trace_mask = p->trace_mask;
   release(&np->lock);
 
   return pid;
