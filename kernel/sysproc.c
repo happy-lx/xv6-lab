@@ -80,7 +80,35 @@ sys_sleep(void)
 int
 sys_pgaccess(void)
 {
-  // lab pgtbl: your code here.
+  uint64 result_mask = 0;
+
+  uint64 user_addr_start;
+  uint64 user_buf_addr;
+  int page_num;
+
+  struct proc* process = myproc();
+
+  if(argaddr(0, &user_addr_start) < 0)
+    return -1;
+  if(argint(1, &page_num) < 0)
+    return -1;
+  if(argaddr(2, &user_buf_addr) < 0)
+    return -1; 
+  // printf("user_addr_start :%p\n",user_addr_start);
+  user_addr_start = PGROUNDDOWN(user_addr_start);
+  // printf("user_addr_start after ground :%p\n",user_addr_start);
+
+  for(int i=0;i<page_num;i++) {
+    pte_t* pte = walk(process->pagetable, user_addr_start, 0);
+    // printf("pte %d is : %p\n",i,*pte);
+    if((*pte & PTE_V) && (*pte & PTE_A)) {
+      result_mask = result_mask | (1 << i);
+      *pte = *pte & ~(PTE_A);
+    }
+    user_addr_start += PGSIZE;
+  }
+  // vmprint(process->pagetable);
+  copyout(process->pagetable, user_buf_addr, (char*)&result_mask, sizeof(uint64));
   return 0;
 }
 #endif
