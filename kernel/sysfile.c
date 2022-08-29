@@ -484,3 +484,30 @@ sys_pipe(void)
   }
   return 0;
 }
+
+uint64
+sys_sigalarm() {
+  int ticks;
+  uint64 handler;
+  argint(0, &ticks);
+  argaddr(1, &handler);
+  struct proc* p = myproc();
+  if(ticks == 0 && handler == 0) {
+    p->alarm_registerd = 0;
+    return 0;
+  }
+  p->alarm_handler = (void (*)())handler;
+  p->alarm_interval = ticks;
+  p->alarm_registerd = 1;
+  p->ticks_left = ticks;
+  return 0;
+}
+
+uint64
+sys_sigreturn(void) {
+  struct proc* p = myproc();
+  p->ticks_left = p->alarm_interval;
+
+  memmove(&(p->trapframe->epc), &(p->alarm_registers), sizeof(struct alarm_registers));
+  return 0;
+}
