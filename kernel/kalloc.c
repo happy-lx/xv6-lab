@@ -21,12 +21,52 @@ struct run {
 struct {
   struct spinlock lock;
   struct run *freelist;
+  int ref_counter[TOTAL_PHYSICAL_PAGES];
 } kmem;
+
+// get the idx in ref_counter array given a physical address
+int
+get_idx(void *pa)
+{
+  return ((uint64)pa - (uint64)KERNBASE) / PGSIZE;
+}
+
+void 
+increment_ref_counter(void *pa)
+{
+  int idx = get_idx(pa);
+  acquire(&kmem.lock);
+  kmem.ref_counter[idx]++;
+  release(&kmem.lock);
+}
+
+void 
+decrement_ref_counter(void *pa)
+{
+  int idx = get_idx(pa);
+  kmem.ref_counter[idx]--;
+}
+
+// this function will aquire lock
+int 
+get_ref_counter(void* pa) {
+  acquire(&kmem.lock);
+  return kmem.ref_counter[get_idx(pa)];
+}
+
+void 
+release_kmem_lock()
+{
+  release(&kmem.lock);
+}
 
 void
 kinit()
 {
   initlock(&kmem.lock, "kmem");
+  // set ref_counter to 1 so that when we fisrt free all pages, we can truely free them all.
+  for(int i=0; i<TOTAL_PHYSICAL_PAGES; i++)
+    kmem.ref_counter[i] = 1;
   freerange(end, (void*)PHYSTOP);
 }
 
@@ -50,16 +90,37 @@ kfree(void *pa)
 
   if(((uint64)pa % PGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP)
     panic("kfree");
-
-  // Fill with junk to catch dangling refs.
-  memset(pa, 1, PGSIZE);
-
-  r = (struct run*)pa;
-
+  
   acquire(&kmem.lock);
-  r->next = kmem.freelist;
-  kmem.freelist = r;
+  // decrease the ref_counter
+  kmem.ref_counter[get_idx(pa)] -= 1;
+  
+  int counter = kmem.ref_counter[get_idx(pa)];
+  if(counter < 0) {
+    panic("kfree: counter < 0");
+  }else if(counter == 0) {
+    // truely free the page when counter == 0
+    // Fill with junk to catch dangling refs.
+    memset(pa, 1, PGSIZE);
+    r = (struct run*)pa;
+    r->next = kmem.freelist;
+    kmem.freelist = r;
+  }else {
+    // do nothing
+  }
   release(&kmem.lock);
+}
+
+// for debug
+int
+free_pages()
+{
+  int res = 0;
+  for(int i=0; i<TOTAL_PHYSICAL_PAGES; i++) {
+    if(kmem.ref_counter[i] == 0)
+      res++;
+  }
+  return res;
 }
 
 // Allocate one 4096-byte page of physical memory.
@@ -72,9 +133,29 @@ kalloc(void)
 
   acquire(&kmem.lock);
   r = kmem.freelist;
-  if(r)
+  if(r) {
     kmem.freelist = r->next;
+    kmem.ref_counter[get_idx((void*) r)] = 1;
+    // printf("free_page numbers :%d\n", free_pages());
+  }
   release(&kmem.lock);
+
+  if(r)
+    memset((char*)r, 5, PGSIZE); // fill with junk
+  return (void*)r;
+}
+
+// the version of kalloc without acquiring lock
+void *
+kalloc_without_lock(void)
+{
+  struct run *r;
+
+  r = kmem.freelist;
+  if(r) {
+    kmem.freelist = r->next;
+    kmem.ref_counter[get_idx((void*) r)] = 1;
+  }
 
   if(r)
     memset((char*)r, 5, PGSIZE); // fill with junk

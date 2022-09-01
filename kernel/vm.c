@@ -303,7 +303,6 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   pte_t *pte;
   uint64 pa, i;
   uint flags;
-  char *mem;
 
   for(i = 0; i < sz; i += PGSIZE){
     if((pte = walk(old, i, 0)) == 0)
@@ -311,14 +310,20 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
     if((*pte & PTE_V) == 0)
       panic("uvmcopy: page not present");
     pa = PTE2PA(*pte);
+    // clear PTE_W to do COW
+    *pte = *pte & ~PTE_W;
+    // set the COW bit
+    *pte = *pte | PTE_COW;
+    // note write bit in flags is cleared
+    // note COW bit is alse set in flags
     flags = PTE_FLAGS(*pte);
-    if((mem = kalloc()) == 0)
-      goto err;
-    memmove(mem, (char*)pa, PGSIZE);
-    if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0){
-      kfree(mem);
+
+    if(mappages(new, i, PGSIZE, (uint64)pa, flags) != 0){
+      printf("uvmcopy: mappages failed\n");
       goto err;
     }
+    // increment reference count on physical page
+    increment_ref_counter((void*) pa);
   }
   return 0;
 
@@ -347,12 +352,26 @@ int
 copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
 {
   uint64 n, va0, pa0;
+  void* mem;
 
   while(len > 0){
     va0 = PGROUNDDOWN(dstva);
     pa0 = walkaddr(pagetable, va0);
     if(pa0 == 0)
       return -1;
+    pte_t* pte = walk(pagetable, va0, 0);
+    int counter = get_ref_counter((void*) pa0);
+    if(counter > 1 && (*pte & PTE_COW) != 0) {
+      if((mem = kalloc_without_lock()) == 0) {
+        release_kmem_lock();
+        return -1;
+      }
+      memmove(mem, (void*)pa0, PGSIZE);
+      *pte = PA2PTE(mem) | PTE_FLAGS(*pte); 
+      decrement_ref_counter((void*) pa0);
+      pa0 = (uint64)mem;
+    }
+    release_kmem_lock();
     n = PGSIZE - (dstva - va0);
     if(n > len)
       n = len;
