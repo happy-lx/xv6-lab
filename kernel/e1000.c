@@ -102,6 +102,34 @@ e1000_transmit(struct mbuf *m)
   // the TX descriptor ring so that the e1000 sends it. Stash
   // a pointer so that it can be freed after sending.
   //
+  int need_release = 1;
+  if(!holding(&e1000_lock)) {
+    acquire(&e1000_lock);
+  }else {
+    need_release = 0;
+  }
+
+  // First ask the E1000 for the TX ring index at which it's expecting the next packet, by reading the E1000_TDT control register.
+  uint32 tail = regs[E1000_TDT];
+  if((tx_ring[tail].status & E1000_TXD_STAT_DD) == 0) {
+    if(need_release) {
+      release(&e1000_lock);
+    }
+    return -1;
+  }
+  if(tx_mbufs[tail] != 0) {
+    mbuffree(tx_mbufs[tail]);
+    tx_mbufs[tail] = m;
+  }
+  tx_ring[tail].addr = (uint64) m->head;
+  tx_ring[tail].length = m->len;
+  tx_ring[tail].cmd = E1000_TXD_CMD_RS | E1000_TXD_CMD_EOP;
+
+  regs[E1000_TDT] = (tail + 1) % TX_RING_SIZE;
+
+  if(need_release) {
+    release(&e1000_lock);
+  }
   
   return 0;
 }
@@ -115,6 +143,26 @@ e1000_recv(void)
   // Check for packets that have arrived from the e1000
   // Create and deliver an mbuf for each packet (using net_rx()).
   //
+  acquire(&e1000_lock);
+
+  uint32 tail = (regs[E1000_RDT] + 1) % RX_RING_SIZE;
+
+  while((rx_ring[tail].status & E1000_RXD_STAT_DD) != 0) {
+    // update the mbuf's m->len to the length reported in the descriptor. Deliver the mbuf to the network stack using net_rx().
+    rx_mbufs[tail]->len = rx_ring[tail].length;
+    net_rx(rx_mbufs[tail]);
+    struct mbuf* buf = mbufalloc(0);
+    rx_mbufs[tail] = buf;
+    rx_ring[tail].addr = (uint64) buf->head;
+    rx_ring[tail].status = 0;
+
+    regs[E1000_RDT] = (regs[E1000_RDT] + 1) % RX_RING_SIZE;
+    tail = (regs[E1000_RDT] + 1) % RX_RING_SIZE;
+
+    // printf("tail now is %d\n", tail);
+  }
+
+  release(&e1000_lock);
 }
 
 void

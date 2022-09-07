@@ -103,6 +103,7 @@ dns_req(uint8 *obuf)
   // qname part of question
   char *qname = (char *) (obuf + sizeof(struct dns));
   char *s = "pdos.csail.mit.edu.";
+  // char *s = "goole.com.";
   encode_qname(qname, s);
   len += strlen(qname) + 1;
 
@@ -189,6 +190,24 @@ dns_rep(uint8 *ibuf, int cc)
       }
       len += 4;
     }
+  }
+
+  // process nscount to pass test
+  for(int i = 0; i < ntohs(hdr->nscount); i++) {
+    char *qn = (char *) (ibuf+len);
+
+    if((int) qn[0] > 63) {  // compression?
+      qn = (char *)(ibuf+qn[1]);
+      len += 2;
+    } else {
+      decode_qname(qn, cc - len);
+      len += strlen(qn)+1;
+    }
+
+    struct dns_data *d = (struct dns_data *) (ibuf+len);
+    // printf("d->type: %x, d->ttl: %x, d->len: %x, d->class: %x\n", ntohs(d->len), ntohs(d->len), ntohs(d->len), ntohs(d->len));
+    len += sizeof(struct dns_data);
+    len += ntohs(d->len);
   }
 
   // needed for DNS servers with EDNS support
