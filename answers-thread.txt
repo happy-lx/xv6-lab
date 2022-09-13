@@ -1,0 +1,3 @@
+1.because 2 `get` thread do the same thing, and no `put` thread disturbs
+2.race condition happens in 2 `put` threads, one thread is putting, and create a new node, change it's next pointing to head, now another thead runs and has put so many nodes in this 
+  link list, when the first thread modify bucket's head pointer, it lose many nodes inserted by second thread before.
