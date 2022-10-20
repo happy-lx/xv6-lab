@@ -85,6 +85,28 @@ balloc(uint dev)
   panic("balloc: out of blocks");
 }
 
+// just for debug: to see how many blocks are free in file system
+uint
+bcount(uint dev)
+{
+  int b, bi, m;
+  struct buf *bp;
+  uint res = 0;
+
+  bp = 0;
+  for(b = 0; b < sb.size; b += BPB){
+    bp = bread(dev, BBLOCK(b, sb));
+    for(bi = 0; bi < BPB && b + bi < sb.size; bi++){
+      m = 1 << (bi % 8);
+      if((bp->data[bi/8] & m) == 0){  // Is block free?
+        res++;
+      }
+    }
+    brelse(bp);
+  }
+  return res;
+}
+
 // Free a disk block.
 static void
 bfree(int dev, uint b)

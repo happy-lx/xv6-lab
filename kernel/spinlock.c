@@ -73,9 +73,15 @@ acquire(struct spinlock *lk)
   //   a5 = 1
   //   s1 = &lk->locked
   //   amoswap.w.aq a5, a5, (s1)
+  // int cnt = 0;
   while(__sync_lock_test_and_set(&lk->locked, 1) != 0) {
 #ifdef LAB_LOCK
     __sync_fetch_and_add(&(lk->nts), 1);
+    // __sync_fetch_and_add(&(cnt), 1);
+    // if(cnt > 10000000) {
+    //   printf("now in lk %s, pid is %d\n", lk->name, myproc()->pid);
+    //   cnt = 0;
+    // }
 #else
    ;
 #endif

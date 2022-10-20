@@ -123,6 +123,9 @@ test0()
       }
 
       readfile(file, N*BSIZE, 1);
+      unlink(file);
+      chdir("..");
+      unlink(dir);
 
       exit(0);
     }
