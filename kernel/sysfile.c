@@ -116,6 +116,7 @@ sys_fstat(void)
 }
 
 // Create the path new as a link to the same inode as old.
+// hard link
 uint64
 sys_link(void)
 {
@@ -316,6 +317,30 @@ sys_open(void)
     }
   }
 
+  int depth = 0;
+  char real_path[MAXPATH];
+  while(ip->type == T_SYMLINK && (omode & O_NOFOLLOW) == 0) {
+    // if the ref cycle is too far
+    if(depth == SYMMAXDEPTH) {
+      iunlockput(ip);
+      end_op();
+      return -1;
+    }
+    // if the file is a symbolic link file
+    if(readi(ip, 0, (uint64)real_path, 0, sizeof(real_path)) == 0) {
+      iunlockput(ip);
+      end_op();
+      return -1;
+    }
+    iunlockput(ip);
+    if((ip = namei(real_path)) == 0) {
+      end_op();
+      return -1;
+    }
+    ilock(ip);
+    depth++;
+  }
+
   if(ip->type == T_DEVICE && (ip->major < 0 || ip->major >= NDEV)){
     iunlockput(ip);
     end_op();
@@ -361,6 +386,25 @@ sys_mkdir(void)
   if(argstr(0, path, MAXPATH) < 0 || (ip = create(path, T_DIR, 0, 0)) == 0){
     end_op();
     return -1;
+  }
+  iunlockput(ip);
+  end_op();
+  return 0;
+}
+
+uint64 sys_symlink(void) {
+  char path[MAXPATH];
+  char target[MAXPATH];
+  struct inode *ip;
+  int r;
+  
+  begin_op();
+  if(argstr(0, target, MAXPATH) < 0 || argstr(1, path, MAXPATH) < 0 || ((ip = create(path, T_SYMLINK, 0, 0)) == 0)) {
+    end_op();
+    return -1;
+  }
+  if((r = writei(ip, 0, (uint64)target, 0, sizeof(target))) != sizeof(target)) {
+    panic("sys_symlink");
   }
   iunlockput(ip);
   end_op();
