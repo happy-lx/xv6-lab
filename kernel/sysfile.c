@@ -15,6 +15,7 @@
 #include "sleeplock.h"
 #include "file.h"
 #include "fcntl.h"
+#include "memlayout.h"
 
 // Fetch the nth word-sized system call argument as a file descriptor
 // and return both the descriptor and the corresponding struct file.
@@ -483,4 +484,163 @@ sys_pipe(void)
     return -1;
   }
   return 0;
+}
+
+uint64
+sys_mmap(void) {
+  // NOTE: argument of addr and offset are always 0
+  int length, prot, flags, fd;
+  struct proc* p = myproc();
+
+  argint(1, &length);
+  argint(2, &prot);
+  argint(3, &flags);
+  argint(4, &fd);
+
+  struct file* f = (p->ofile)[fd];
+
+  if(length > SINGLEVMASIZE) {
+    return -1;
+  }
+  if((flags == MAP_SHARED) && (prot & PROT_WRITE) && !f->writable) {
+    // can not map PROT_WRITE to a file opened as read only
+    return -1;
+  }
+
+  if(f->type != FD_INODE) {
+    // only support mmap a normal file
+    return -1;
+  }
+
+  // first acquire a emtpy vma
+  struct vma *vma = 0;
+  int i = 0;
+  for(; i<VMASIZE; i++) {
+    if(p->vmas[i].valid == 0) {
+      vma = p->vmas + i;
+      break;
+    }
+  }
+  if(!vma) {
+    panic("no vma\n");
+  }
+  vma->valid = 1;
+  vma->address = get_vma_start_address(i);
+  vma->length = length;
+  vma->permission = prot;
+  vma->shared = (flags == MAP_SHARED);
+  vma->f = filedup(f);
+  vma->offset = 0;
+  
+  // NOTE: now, we don't map page for mmap
+
+  return vma->address;
+}
+
+int check_contain(struct vma* vma, uint64 address_start, int length) {
+  // -1: not valid or not contain
+  //  1: valid && address_start is not equal to vma->address
+  //  2: valid && address_start is equal to vma->address
+  if(vma->valid == 0) {
+    return -1;
+  }
+  if((address_start >= vma->address) && ((address_start + length) <= (vma->address + vma->length))) {
+    if(address_start != vma->address) {
+      return 1;
+    }else {
+      return 2;
+    }
+  }
+  return -1;
+}
+
+uint64 
+unmap_helper(uint64 address_start, int length, struct proc* p) {
+  if(address_start % PGSIZE != 0 || length % PGSIZE != 0) {
+    panic("sys_munmap: unaligned munmap");
+  }
+
+  // 1. find the vma which covers the [address_start, address_end]
+  struct vma *vma = 0;
+  int i = 0;
+  int tmp;
+  for(; i<VMASIZE; i++) {
+    if((tmp = check_contain(p->vmas + i, address_start, length)) != -1) {
+      vma = p->vmas + i;
+      break;
+    }
+  }
+  // if nothing matches, invalid munmap
+  if(!vma) {
+    return -1;
+  }
+
+  uint64 page_start = address_start;
+  uint64 page_end   = address_start + length - 1;
+  
+  while(page_start <= page_end) {
+    pte_t* pte = walk(p->pagetable, page_start, 0);
+    uint offset = page_start - vma->address + vma->offset;
+    if(pte != 0 && (*pte & PTE_V) != 0) {
+      uint64 mem = PTE2PA(*pte);
+      if(vma->shared) {
+        // write the valid ** TODO: Dirty ** page to file [address_start, end] if shared open
+        begin_op();
+        ilock(vma->f->ip);
+        if(offset >= vma->f->ip->size) {
+          // if the offset is bigger than size, do not modify the file
+          iunlock(vma->f->ip);
+          end_op();
+        }else {
+          // otherwise, write to file
+          int size = (vma->f->ip->size - offset) >= PGSIZE ? PGSIZE : vma->f->ip->size - offset;
+          writei(vma->f->ip, 0, mem, offset, size);
+          // printf("writei offset: %d, size: %d\n", offset, size);
+          iunlock(vma->f->ip);
+          end_op();
+        }
+      }
+      kfree((void*)mem);
+      *pte = 0;
+    }
+    page_start += PGSIZE;
+  }
+  if(tmp == 1) {
+    // address_start is not equal to vma->address
+    // so it must be like:
+    //    [vma_start,           vma_end]
+    //          [address_start,     end]
+    vma->length -= length;
+  }else {
+    // address_start is equal to vma->address
+    // so it must be like:
+    //    [vma_start,           vma_end]
+    //    [address_start,     end]
+    // or 
+    //    [vma_start,           vma_end]
+    //    [address_start,           end]
+    if(vma->length == length) {
+      vma->valid = 0;
+      fileclose(vma->f);
+    }else {
+      vma->address = address_start + length;
+      vma->offset += length;
+      vma->length -= length;
+    }
+  }
+  sfence_vma();
+  return 0;
+}
+
+uint64
+sys_munmap(void) {
+  // NOTE: munmap will not make a hole of the address space
+  // NOTE: address_start and length will be page-aligned
+  uint64 address_start;
+  int length;
+  argaddr(0, &address_start);
+  argint(1, &length);
+  struct proc* p = myproc();
+  
+  return unmap_helper(address_start, length, p);
 }

@@ -5,6 +5,8 @@
 #include "riscv.h"
 #include "defs.h"
 #include "fs.h"
+#include "spinlock.h"
+#include "proc.h"
 
 /*
  * the kernel's page table.
@@ -151,6 +153,30 @@ mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
     if(*pte & PTE_V)
       panic("mappages: remap");
     *pte = PA2PTE(pa) | perm | PTE_V;
+    if(a == last)
+      break;
+    a += PGSIZE;
+    pa += PGSIZE;
+  }
+  return 0;
+}
+
+int
+remappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm) {
+  uint64 a, last;
+  pte_t *pte;
+
+  if(size == 0)
+    panic("remappages: size");
+  
+  a = PGROUNDDOWN(va);
+  last = PGROUNDDOWN(va + size - 1);
+  for(;;){
+    if((pte = walk(pagetable, a, 0)) == 0)
+      return -1;
+    if((*pte & PTE_V) == 0)
+      panic("remappages: can not remap");
+    *pte = PA2PTE(pa) | perm | PTE_FLAGS(*pte);
     if(a == last)
       break;
     a += PGSIZE;
@@ -327,6 +353,55 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   return -1;
 }
 
+// Given a parent process's page table, copy
+// its **mmaped** memory into a child's page table.
+// Copies both the page table and the
+// physical memory.
+// returns 0 on success, -1 on failure.
+// frees any allocated pages on failure.
+int
+uvmcopymmap(pagetable_t old, pagetable_t new, struct proc *p)
+{
+  pte_t *pte;
+  uint64 pa, i;
+  uint64 page_start, page_end;
+  uint flags;
+  char *mem;
+  for(i=0; i<VMASIZE; i++) {
+    if(p->vmas[i].valid) {
+      page_start = PGROUNDDOWN(p->vmas[i].address);
+      page_end = PGROUNDDOWN(p->vmas[i].address + p->vmas[i].length - 1);
+      while(page_start <= page_end) {
+        pte = walk(old, page_start, 0);
+        if(pte != 0 && (*pte & PTE_V) != 0) {
+          if((mem = kalloc()) == 0) {
+            printf("uvmcopymmap: out of memory\n");
+            goto uvmcopymmap_err;
+          }
+          pa = PTE2PA(*pte);
+          flags = PTE_FLAGS(*pte);
+          memmove(mem, (char*)pa, PGSIZE);
+          if(mappages(new, page_start, PGSIZE, (uint64)mem, flags) != 0) {
+            kfree(mem);
+            goto uvmcopymmap_err;
+          }
+        }
+
+        page_start += PGSIZE;
+      }
+    }
+  }
+  return 0;
+
+uvmcopymmap_err:
+  for(int j=0; j<=i; j++) {
+    if(p->vmas[j].valid) {
+        uvmunmap(new, p->vmas[j].address, p->vmas[j].length / PGSIZE, 1);
+    }
+  }
+  return -1;
+}
+
 // mark a PTE invalid for user access.
 // used by exec for the user stack guard page.
 void
@@ -431,4 +506,9 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
   } else {
     return -1;
   }
+}
+
+inline uint64
+get_vma_start_address(int index) {
+  return MAXVA - SINGLEVMASIZE - SINGLEVMASIZE * index;
 }

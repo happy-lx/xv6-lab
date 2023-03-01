@@ -158,6 +158,8 @@ void            kvminit(void);
 void            kvminithart(void);
 void            kvmmap(pagetable_t, uint64, uint64, uint64, int);
 int             mappages(pagetable_t, uint64, uint64, uint64, int);
+int             remappages(pagetable_t, uint64, uint64, uint64, int);
+pte_t *         walk(pagetable_t pagetable, uint64 va, int alloc);
 pagetable_t     uvmcreate(void);
 void            uvminit(pagetable_t, uchar *, uint);
 uint64          uvmalloc(pagetable_t, uint64, uint64);
@@ -170,6 +172,8 @@ uint64          walkaddr(pagetable_t, uint64);
 int             copyout(pagetable_t, uint64, char *, uint64);
 int             copyin(pagetable_t, char *, uint64, uint64);
 int             copyinstr(pagetable_t, char *, uint64, uint64);
+uint64          get_vma_start_address(int);
+int             uvmcopymmap(pagetable_t old, pagetable_t new, struct proc *p);
 
 // plic.c
 void            plicinit(void);
@@ -181,6 +185,9 @@ void            plic_complete(int);
 void            virtio_disk_init(void);
 void            virtio_disk_rw(struct buf *, int);
 void            virtio_disk_intr(void);
+
+// sysfile.c
+uint64          unmap_helper(uint64 address_start, int length, struct proc* p);
 
 // number of elements in fixed-size array
 #define NELEM(x) (sizeof(x)/sizeof((x)[0]))

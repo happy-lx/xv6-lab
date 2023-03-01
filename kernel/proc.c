@@ -42,6 +42,13 @@ proc_mapstacks(pagetable_t kpgtbl) {
   }
 }
 
+void
+vma_init(struct proc *p) {
+  for(int i=0; i<VMASIZE; i++) {
+    ((p->vmas)[i]).valid = 0;
+  }
+}
+
 // initialize the proc table at boot time.
 void
 procinit(void)
@@ -53,6 +60,7 @@ procinit(void)
   for(p = proc; p < &proc[NPROC]; p++) {
       initlock(&p->lock, "proc");
       p->kstack = KSTACK((int) (p - proc));
+      vma_init(p);
   }
 }
 
@@ -288,7 +296,17 @@ fork(void)
     return -1;
   }
   np->sz = p->sz;
-
+  // Copy the vmas from parent to child.
+  memmove(np->vmas, p->vmas, sizeof(p->vmas));
+  for(int i=0; i<VMASIZE; i++) {
+    if(np->vmas[i].valid) {
+      np->vmas[i].f = filedup(np->vmas[i].f);
+    }
+  }
+  // Give the child a bunch of new physical pages of mmaped file
+  if(uvmcopymmap(p->pagetable, np->pagetable, np)) {
+    panic("fork");
+  }
   // copy saved user registers.
   *(np->trapframe) = *(p->trapframe);
 
@@ -351,6 +369,15 @@ exit(int status)
       fileclose(f);
       p->ofile[fd] = 0;
     }
+  }
+  // unmap all the vmas if the process exit without munmapping
+  for(int i=0; i<VMASIZE; i++) {
+    if(p->vmas[i].valid) {
+      unmap_helper(p->vmas[i].address, p->vmas[i].length, p);
+    }
+  }
+  for(int i=0; i<VMASIZE; i++) {
+    p->vmas[i].valid = 0;
   }
 
   begin_op();

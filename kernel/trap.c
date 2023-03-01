@@ -5,6 +5,18 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include "fcntl.h"
+
+struct file {
+  enum { FD_NONE, FD_PIPE, FD_INODE, FD_DEVICE } type;
+  int ref; // reference count
+  char readable;
+  char writable;
+  struct pipe *pipe; // FD_PIPE
+  struct inode *ip;  // FD_INODE and FD_DEVICE
+  uint off;          // FD_INODE
+  short major;       // FD_DEVICE
+};
 
 struct spinlock tickslock;
 uint ticks;
@@ -67,12 +79,70 @@ usertrap(void)
     syscall();
   } else if((which_dev = devintr()) != 0){
     // ok
+  } else if(r_scause() == 13 || r_scause() == 15) {
+    // handle load or store page fault
+    int is_read = r_scause() == 13;
+    uint64 fault_addr = r_stval();
+    if(fault_addr < 0 || fault_addr >= MAXVA) {
+      printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
+      printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
+      p->killed = 1;
+      goto bad;
+    }
+    // 1. find if any vma match this fault address
+    struct vma *found_vma = 0;
+    for(int i=0; i<VMASIZE; i++) {
+      if(p->vmas[i].valid && (fault_addr >= p->vmas[i].address && fault_addr < (p->vmas[i].address + p->vmas[i].length))) {
+        found_vma = p->vmas + i;
+        break;
+      }
+    }
+    // if no matching, bad
+    if(found_vma == 0) {
+      printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
+      printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
+      p->killed = 1;
+      goto bad;
+    }
+    // check permissions if matched
+    if(((found_vma->permission & PROT_READ) == 0) || ((found_vma->permission & PROT_WRITE) == 0 && !is_read)) {
+      printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
+      printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
+      p->killed = 1;
+      goto bad;
+    }
+
+    // 2. read a page from the file and do the actual mapping
+    uint64 mem = (uint64)kalloc();
+    memset((void*) mem, 0, PGSIZE);
+    ilock(found_vma->f->ip);
+    // printf("PGROUNDDOWN(fault_addr) : %p %p %p\n", PGROUNDDOWN(fault_addr), fault_addr, found_vma->address);
+    readi(found_vma->f->ip, 0, mem, PGROUNDDOWN(fault_addr) - found_vma->address + found_vma->offset, PGSIZE);
+    pte_t *pte = walk(p->pagetable, fault_addr, 0);
+    if(pte == 0 || (*pte & PTE_V) == 0) {
+      if(mappages(p->pagetable, PGROUNDDOWN(fault_addr), PGSIZE, mem, (is_read ? PTE_R : PTE_W) | PTE_U)) {
+        printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
+        printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
+        p->killed = 1;
+        goto bad;
+      }
+    }else {
+      if(remappages(p->pagetable, PGROUNDDOWN(fault_addr), PGSIZE, mem, (is_read ? PTE_R : PTE_W) | PTE_U)) {
+        printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
+        printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
+        p->killed = 1;
+        goto bad;
+      }
+    }
+    iunlock(found_vma->f->ip);
+
   } else {
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
     printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
     p->killed = 1;
   }
 
+bad:
   if(p->killed)
     exit(-1);
 

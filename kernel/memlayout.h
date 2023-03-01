@@ -61,7 +61,17 @@
 //   original data and bss
 //   fixed-size stack
 //   expandable heap
+//   ... (todo: make sure vma will not cross over this)
+//   vma[VMASIZE - 1]
+//   vma[VMASIZE - 2]
 //   ...
-//   TRAPFRAME (p->trapframe, used by the trampoline)
-//   TRAMPOLINE (the same page as in the kernel)
+//   ---------------------------------------------------
+//   vma[0]                                            + -> SINGLEVMASIZE
+//   ---------------------------------------------------
+//   gap                                               +
+//   TRAPFRAME (p->trapframe, used by the trampoline)  + -> SINGLEVMASIZE
+//   TRAMPOLINE (the same page as in the kernel)       +
+//   ---------------------------------------------------
 #define TRAPFRAME (TRAMPOLINE - PGSIZE)
+
+#define SINGLEVMASIZE (1 << 30) // 1G per vma 
